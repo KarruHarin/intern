@@ -68,7 +68,7 @@ const VideoCall: React.FC<VideoCallProps> = ({
 
     socket.once('callEnded', () => {
       leaveCall();
-     
+      setIsVideoCallActive(false);
 
     });
 
@@ -162,12 +162,24 @@ const VideoCall: React.FC<VideoCallProps> = ({
       connectionRef.current = null;
     }
     cleanupListeners();
-    socket.emit('endCall', { to: caller });
-    ///
-    ///
+    
+    // Emit endCall event to both parties
+    socket.emit('endCall', { to: idToCall });
+    
+    // Clean up the local state
     setIsVideoCallActive(false);
     setCallAccepted(false);
-    setReceivingCall(false)
+    setReceivingCall(false);
+    
+    // Stop all tracks in the stream
+    if (stream) {
+      stream.getTracks().forEach(track => track.stop());
+    }
+    setStream(null);
+    
+    // Clear video elements
+    if (myVideo.current) myVideo.current.srcObject = null;
+    if (userVideo.current) userVideo.current.srcObject = null;
   };
 
   const toggleMute = () => {

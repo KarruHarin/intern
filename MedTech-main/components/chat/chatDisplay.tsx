@@ -94,6 +94,14 @@ export function ChatDisplay({ data, removedata ,socket }: any) {
       setConvoId(id)
     });
 
+    socket.on("callEnded", () => {
+      handleCallEnded();
+    });
+
+    socket.on("callDeclined", () => {
+      handleCallEnded();
+    });
+
     socket.on("callUser", (data: { from: string; name: string; signal: any }) => {
       setIsReceivingCall(true);
       setCaller(data.from);
@@ -108,6 +116,8 @@ export function ChatDisplay({ data, removedata ,socket }: any) {
       socket.off("receivedMessage");
       socket.off("conversationId");
       socket.off("callUser");
+      socket.off("callEnded");
+      socket.off("callDeclined");
 
     };
   }, [doctorId, clientId,mail.selected]);
@@ -126,6 +136,13 @@ export function ChatDisplay({ data, removedata ,socket }: any) {
     setIsReceivingCall(false);
     setIsVideoCallActive(false);
     socket.emit("declineCall", { to: caller });
+  };
+
+  const handleCallEnded = () => {
+    setIsVideoCallActive(false);
+    setIsReceivingCall(false);
+    setCaller("");
+    setCallerSignal(null);
   };
 
   const sendMessage = () => {
