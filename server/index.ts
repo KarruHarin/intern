@@ -381,10 +381,13 @@ io.on('connection', (socket) => {
     console.log('A user connected');
     socket.emit('me', socket.id);
 
-    //Ending the call
-    socket.on("endCall",()=>{
-         socket.broadcast.emit("callEnded")
-    })
+    socket.on('declineCall', (data) => {
+        io.to(data.to).emit('callDeclined');
+      });
+      
+      socket.on('endCall', (data) => {
+        io.to(data.to).emit('callEnded');
+      });
     
     //call user
     socket.on("callUser",(data)=>{

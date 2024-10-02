@@ -54,6 +54,10 @@ export function ChatDisplay({ data, removedata ,socket }: any) {
   const [doctorId,setdoctorId] = useState<string|null>("");
   const [clientId,setclientId] = useState<string|null>("");
   const [isVideoCallActive, setIsVideoCallActive] = useState<boolean>(false);
+  const [isReceivingCall, setIsReceivingCall] = useState(false);
+  const [caller, setCaller] = useState("");
+  const [callerSignal, setCallerSignal] = useState(null);
+
 
   const startVideoCall = () => {
     setIsVideoCallActive(true); // Show the VideoCall component
@@ -66,7 +70,11 @@ export function ChatDisplay({ data, removedata ,socket }: any) {
     setclientId(clientId)
   
     const roomId = `room_${doctorId}_${clientId}`;
+    
+
     socket.emit("joinRoom", { doctorId, clientId });
+
+    socket.emit("getsetId",{userId:id})
 
     socket.on("previousMessages", (previousMessages: Message[]) => {
       console.log("prev",previousMessages)
@@ -86,12 +94,20 @@ export function ChatDisplay({ data, removedata ,socket }: any) {
       setConvoId(id)
     });
 
+    socket.on("callUser", (data: { from: string; name: string; signal: any }) => {
+      setIsReceivingCall(true);
+      setCaller(data.from);
+      setCallerSignal(data.signal);
+      setIsVideoCallActive(true); // Automatically open video component
+    });
+
  
 
     return () => {
       socket.off("previousMessages");
       socket.off("receivedMessage");
       socket.off("conversationId");
+      socket.off("callUser");
 
     };
   }, [doctorId, clientId,mail.selected]);
@@ -99,6 +115,17 @@ export function ChatDisplay({ data, removedata ,socket }: any) {
   const handleEmojiClick = (event: any) => {
     setOpen(false);
     setMessage((prev) => prev + event.emoji);
+  };
+
+  const handleAcceptCall = () => {
+    setIsReceivingCall(false);
+    // The VideoCall component will handle the actual call acceptance
+  };
+
+  const handleDeclineCall = () => {
+    setIsReceivingCall(false);
+    setIsVideoCallActive(false);
+    socket.emit("declineCall", { to: caller });
   };
 
   const sendMessage = () => {
@@ -224,14 +251,68 @@ export function ChatDisplay({ data, removedata ,socket }: any) {
             setIsVideoCallActive={setIsVideoCallActive}
             clientId={clientId}
             doctorId={doctorId}
+            isReceivingCall={isReceivingCall}
+            caller={caller}
+            callerSignal={callerSignal}
+            onAcceptCall={handleAcceptCall}
+            onDeclineCall={handleDeclineCall}
           />
         </div>
-      ) : (
+      )  : (
         <>
           {/* Header */}
           <div className="flex items-center h-16 p-3">
-            {/* ... (header content remains the same) ... */}
-          </div>
+        <div className="flex items-center gap-2">
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                disabled={!mail}
+                onClick={Remove}
+              >
+                <ArrowLeft className="h-6 w-6" />
+                <span className="sr-only">Back</span>
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Back</TooltipContent>
+          </Tooltip>
+          {mail.name && (
+            <Avatar className="h-10 w-10">
+              <AvatarImage
+                className="rounded-full"
+                src={`https://avatar.iran.liara.run/username?username=${mail.name}`}
+                alt="@shadcn"
+              />
+              <AvatarFallback>CN</AvatarFallback>
+            </Avatar>
+          )}
+          <span className="text-sm font-medium">{mail.name}</span>
+        </div>
+        <div className="ml-auto flex items-center gap-2">
+          <Search size={20} />
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" size="icon" disabled={!mail.selected}>
+                <MoreVertical className="h-5 w-5" />
+                <span className="sr-only">More</span>
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent
+              align="end"
+              className="flex flex-col gap-1 bg-muted"
+            >
+              <DropdownMenuItem>Mute</DropdownMenuItem>
+              <DropdownMenuItem>Select Messages</DropdownMenuItem>
+              <DropdownMenuItem>Report</DropdownMenuItem>
+              <Separator />
+              <DropdownMenuItem className="text-red-500">
+                Delete chat
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+      </div>
           <Separator />
   
           {/* Chat messages */}
