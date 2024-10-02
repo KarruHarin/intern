@@ -1,0 +1,7 @@
+*.log
+
+# Ignore node_modules directory
+node_modules/
+
+# Ignore all files in a specific directory
+/path/to/directory/*
