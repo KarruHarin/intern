@@ -71,12 +71,25 @@ const VideoCall: React.FC<VideoCallProps> = ({
       setIsVideoCallActive(false);
 
     });
+    
+    socket.on('endCall', () => {
+      setCallEnded(true);
+      if (connectionRef.current) {
+        connectionRef.current.destroy();
+      }
+      setIsVideoCallActive(false);
+    });
+  
+    
+
 
 
 
     return () => {
       socket.off('socketIds');
       socket.off('callEnded');
+      socket.off('endCall');
+
       cleanupListeners()
     };
   }, [socket, id, clientId, doctorId, isReceivingCall, caller]);
@@ -157,14 +170,17 @@ const VideoCall: React.FC<VideoCallProps> = ({
 
   const leaveCall = () => {
     setCallEnded(true);
+
+    // Emit endCall event to both parties
+    socket.emit('endCall', { to: idToCall });
+
     if (connectionRef.current) {
       connectionRef.current.destroy();
       connectionRef.current = null;
     }
     cleanupListeners();
     
-    // Emit endCall event to both parties
-    socket.emit('endCall', { to: idToCall });
+    
     
     // Clean up the local state
     setIsVideoCallActive(false);

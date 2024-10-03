@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import React, { useEffect, useState, useRef } from 'react';
 import {
   ArrowLeft,
   MoreVertical,
@@ -7,10 +7,10 @@ import {
   Smile,
   X,
   Loader,
-  FileIcon
+  FileIcon,
+  Video
 } from "lucide-react";
 import EmojiPicker from "emoji-picker-react";
-
 import { format, isSameDay } from "date-fns";
 import { useMail } from "./chat";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
@@ -37,79 +37,73 @@ interface Message {
   filePath?: string;
   fileType?: string;
   fileName?: string;
+  seenBy: string[];
 }
 
-
-
-export function ChatDisplay({ data, removedata ,socket }: any) {
+export function ChatDisplay({ data, removedata, socket }: any) {
   const [mail, setMail] = useMail();
   const [message, setMessage] = useState<string>("");
   const [messages, setMessages] = useState<Message[]>([]);
   const [open, setOpen] = useState(false);
-  const { id, role } = useUser();
-  const [convoId,setConvoId] = useState<any>("")
+  const { id: currentUserId, role } = useUser();
+  const [convoId, setConvoId] = useState<string>("");
   const [file, setFile] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
-  const [doctorId,setdoctorId] = useState<string|null>("");
-  const [clientId,setclientId] = useState<string|null>("");
+  const [doctorId, setDoctorId] = useState<string | null>("");
+  const [clientId, setClientId] = useState<string | null>("");
   const [isVideoCallActive, setIsVideoCallActive] = useState<boolean>(false);
   const [isReceivingCall, setIsReceivingCall] = useState(false);
   const [caller, setCaller] = useState("");
   const [callerSignal, setCallerSignal] = useState(null);
-
+  const lastSeenMessageRef = useRef<number | null>(null);
 
   const startVideoCall = () => {
-    setIsVideoCallActive(true); // Show the VideoCall component
+    setIsVideoCallActive(true);
   };
 
   useEffect(() => {
-    let doctorId = role === "DOCTOR" ? id : mail.selected;
-    let clientId = role === "DOCTOR" ? mail.selected : id;
-    setdoctorId(doctorId)
-    setclientId(clientId)
+    let doctorId = role === "DOCTOR" ? currentUserId : mail.selected;
+    let clientId = role === "DOCTOR" ? mail.selected : currentUserId;
+    setDoctorId(doctorId);
+    setClientId(clientId);
   
     const roomId = `room_${doctorId}_${clientId}`;
     
-
     socket.emit("joinRoom", { doctorId, clientId });
-
-    socket.emit("getsetId",{userId:id})
+    socket.emit("getsetId", { userId: currentUserId });
 
     socket.on("previousMessages", (previousMessages: Message[]) => {
-      console.log("prev",previousMessages)
       setMessages(previousMessages);
     });
+
     socket.on("receivedMessage", (newMessage: Message) => {
       setMessages((prevMessages) => {
-        // Check if the message already exists to prevent duplicates
         if (!prevMessages.some(msg => msg.id === newMessage.id)) {
           return [...prevMessages, newMessage];
         }
         return prevMessages;
-      });
-    });
-    socket.on("conversationId", (id: any) => {
-      console.log(id);
-      setConvoId(id)
+      });
     });
 
-    socket.on("callEnded", () => {
-      handleCallEnded();
+    socket.on("conversationId", (id: string) => {
+      setConvoId(id);
     });
 
-    socket.on("callDeclined", () => {
-      handleCallEnded();
-    });
+    socket.on("callEnded", handleCallEnded);
+    socket.on("callDeclined", handleCallEnded);
+    socket.on("callUser", handleIncomingCall);
 
-    socket.on("callUser", (data: { from: string; name: string; signal: any }) => {
-      setIsReceivingCall(true);
-      setCaller(data.from);
-      setCallerSignal(data.signal);
-      setIsVideoCallActive(true); // Automatically open video component
+    socket.on('messagesSeen', ({ userId, lastSeenMessageId, updatedMessages }) => {
+      setMessages((prevMessages) =>
+        prevMessages.map((msg) =>
+          msg.id <= lastSeenMessageId
+            ? updatedMessages.find((updatedMsg: Message) => updatedMsg.id === msg.id) || msg
+            : msg
+        )
+      );
     });
-
- 
+    
 
     return () => {
       socket.off("previousMessages");
@@ -118,9 +112,21 @@ export function ChatDisplay({ data, removedata ,socket }: any) {
       socket.off("callUser");
       socket.off("callEnded");
       socket.off("callDeclined");
-
+      socket.off("messagesSeen");
     };
-  }, [doctorId, clientId,mail.selected]);
+  }, [currentUserId, mail.selected, role, socket]);
+
+  useEffect(() => {
+    const lastMessage = messages[messages.length - 1];
+    if (lastMessage && lastMessage.id !== lastSeenMessageRef.current) {
+      lastSeenMessageRef.current = lastMessage.id;
+      socket.emit('markAsSeen', {
+        userId: currentUserId,
+        conversationId: convoId,
+        lastSeenMessageId: lastMessage.id
+      });
+    }
+  }, [messages, currentUserId, convoId, socket]);
 
   const handleEmojiClick = (event: any) => {
     setOpen(false);
@@ -129,7 +135,6 @@ export function ChatDisplay({ data, removedata ,socket }: any) {
 
   const handleAcceptCall = () => {
     setIsReceivingCall(false);
-    // The VideoCall component will handle the actual call acceptance
   };
 
   const handleDeclineCall = () => {
@@ -145,13 +150,18 @@ export function ChatDisplay({ data, removedata ,socket }: any) {
     setCallerSignal(null);
   };
 
+  const handleIncomingCall = (data: { from: string; name: string; signal: any }) => {
+    setIsReceivingCall(true);
+    setCaller(data.from);
+    setCallerSignal(data.signal);
+    setIsVideoCallActive(true);
+  };
+
   const sendMessage = () => {
     if (message) {
-       const roomId = `room_${doctorId}_${clientId}`;
-      let conversationId = convoId
-      console.log("ids = ",convoId);
+      const roomId = `room_${doctorId}_${clientId}`;
       socket.emit("sendMessage", {
-        conversationId,
+        conversationId: convoId,
         roomId,
         message,
         senderId: role === "DOCTOR" ? doctorId : clientId,
@@ -194,30 +204,18 @@ export function ChatDisplay({ data, removedata ,socket }: any) {
 
       if (data.filePath) {
         socket.emit("fileUpload", {
-          conversationId:convoId,
+          conversationId: convoId,
           roomId: `room_${doctorId}_${clientId}`,
           filePath: data.filePath,
           senderId: role === "DOCTOR" ? doctorId : clientId,
           fileType: file.type,
           fileName: file.name,
         });
-        setMessages(prevMessages => [...prevMessages, {
-          id: Date.now(), // Use a temporary ID
-          content: '',
-          senderId: role === "DOCTOR" ? doctorId : clientId,
-          createdAt: new Date().toISOString(),
-          filePath: data.filePath,
-          fileType: file.type,
-          fileName: file.name
-        }]);
         setFile(null);
         setPreviewUrl(null);
-      socket.off("fileUpload");
       }
-
     } catch (error) {
       console.error('Error uploading file:', error);
-      // Handle the error (e.g., show an error message to the user)
     } finally {
       setIsLoading(false);
     }
@@ -232,11 +230,6 @@ export function ChatDisplay({ data, removedata ,socket }: any) {
     setMail({ selected: null, name: "" });
     removedata();
   };
-
-  useEffect(() => {
-    setOpen(false);
-    setMessage("");
-  }, [removedata, data]);
 
   const renderFilePreview = (filePath: string, fileType: string, fileName: string) => {
     if (fileType.startsWith('image/')) {
@@ -259,6 +252,65 @@ export function ChatDisplay({ data, removedata ,socket }: any) {
       );
     }
   };
+
+  const renderMessages = () => {
+    return messages.map((item, index) => {
+      console.log(item);
+      
+      const currentDate = new Date(item.createdAt);
+      const previousDate = index > 0 ? new Date(messages[index - 1].createdAt) : null;
+      const showDateSeparator = !previousDate || !isSameDay(currentDate, previousDate);
+      const isCurrentUser = item.senderId === (role === "DOCTOR" ? doctorId : clientId);
+      const isLastMessage = index === messages.length - 1;
+
+      return (
+        <div key={item.id}>
+          {showDateSeparator && (
+            <div className="w-full h-10 flex flex-col justify-center items-center my-2">
+              <Separator />
+              <span className="text-sm text-muted-foreground">
+                {format(currentDate, "MMMM d, yyyy")}
+              </span>
+            </div>
+          )}
+          <div className={`flex ${isCurrentUser ? "justify-end" : "justify-start"}`}>
+            <div className={`lg:max-w-[40%] max-w-[80%] px-2 py-1 font-normal rounded-t-md ${
+              isCurrentUser ? "rounded-l-md bg-primary text-white" : "rounded-r-md bg-muted text-foreground"
+            }`}>
+              {item.filePath ? (
+                renderFilePreview(item.filePath, item.fileType || "", item.fileName || "")
+              ) : (
+                <p>{item.content}</p>
+              )}
+              <div className="w-full flex justify-end">
+                <p className="text-[10px] opacity-85">
+                  {format(currentDate, "p")}
+                </p>
+              </div>
+            </div>
+          </div>
+          {isLastMessage && (
+    (() => {
+    const targetUserId = role === "DOCTOR" ? clientId : doctorId;
+    const seenTime = item.seenBy.find(seen => seen.userId === targetUserId)?.seenAt;
+    
+    if (seenTime) {
+      return (
+        <div className="text-xs text-gray-500 text-right">
+          Seen at {format(new Date(seenTime), "p")}
+        </div>
+      );
+    }
+    
+    return null;
+  })()
+)}
+        </div>
+      );
+    });
+  };
+
+
   return (
     <div className="flex relative h-full flex-col">
       {isVideoCallActive ? (
@@ -275,122 +327,81 @@ export function ChatDisplay({ data, removedata ,socket }: any) {
             onDeclineCall={handleDeclineCall}
           />
         </div>
-      )  : (
+      ) : (
         <>
           {/* Header */}
           <div className="flex items-center h-16 p-3">
-        <div className="flex items-center gap-2">
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon"
-                disabled={!mail}
-                onClick={Remove}
-              >
-                <ArrowLeft className="h-6 w-6" />
-                <span className="sr-only">Back</span>
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>Back</TooltipContent>
-          </Tooltip>
-          {mail.name && (
-            <Avatar className="h-10 w-10">
-              <AvatarImage
-                className="rounded-full"
-                src={`https://avatar.iran.liara.run/username?username=${mail.name}`}
-                alt="@shadcn"
-              />
-              <AvatarFallback>CN</AvatarFallback>
-            </Avatar>
-          )}
-          <span className="text-sm font-medium">{mail.name}</span>
-        </div>
-        <div className="ml-auto flex items-center gap-2">
-          <Search size={20} />
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="icon" disabled={!mail.selected}>
-                <MoreVertical className="h-5 w-5" />
-                <span className="sr-only">More</span>
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent
-              align="end"
-              className="flex flex-col gap-1 bg-muted"
-            >
-              <DropdownMenuItem>Mute</DropdownMenuItem>
-              <DropdownMenuItem>Select Messages</DropdownMenuItem>
-              <DropdownMenuItem>Report</DropdownMenuItem>
-              <Separator />
-              <DropdownMenuItem className="text-red-500">
-                Delete chat
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        </div>
-      </div>
+            <div className="flex items-center gap-2">
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    disabled={!mail}
+                    onClick={Remove}
+                  >
+                    <ArrowLeft className="h-6 w-6" />
+                    <span className="sr-only">Back</span>
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Back</TooltipContent>
+              </Tooltip>
+              {mail.name && (
+                <Avatar className="h-10 w-10">
+                  <AvatarImage
+                    className="rounded-full"
+                    src={`https://avatar.iran.liara.run/username?username=${mail.name}`}
+                    alt="@shadcn"
+                  />
+                  <AvatarFallback>CN</AvatarFallback>
+                </Avatar>
+              )}
+              <span className="text-sm font-medium">{mail.name}</span>
+            </div>
+            <div className="ml-auto flex items-center gap-2">
+              <Search size={20} />
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={startVideoCall}
+                    disabled={!mail.selected}
+                  >
+                    <Video className="h-5 w-5" />
+                    <span className="sr-only">Start Video Call</span>
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Start Video Call</TooltipContent>
+              </Tooltip>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="ghost" size="icon" disabled={!mail.selected}>
+                    <MoreVertical className="h-5 w-5" />
+                    <span className="sr-only">More</span>
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent
+                  align="end"
+                  className="flex flex-col gap-1 bg-muted"
+                >
+                  <DropdownMenuItem>Mute</DropdownMenuItem>
+                  <DropdownMenuItem>Select Messages</DropdownMenuItem>
+                  <DropdownMenuItem>Report</DropdownMenuItem>
+                  <Separator />
+                  <DropdownMenuItem className="text-red-500">
+                    Delete chat
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+          </div>
           <Separator />
   
           {/* Chat messages */}
           <ScrollArea className="h-[calc(100%-96px)] relative overflow-auto">
             <div className="flex lg:w-[70%] mx-auto p-4 pb-8 gap-2 flex-col">
-              {messages.length > 0 ? (
-                messages.map((item, index) => {
-                  const currentDate = new Date(item.createdAt);
-                  const previousDate =
-                    index > 0 ? new Date(messages[index - 1].createdAt) : null;
-                  const showDateSeparator =
-                    !previousDate || !isSameDay(currentDate, previousDate);
-                  const isCurrentUser =
-                    item.senderId === (role === "DOCTOR" ? doctorId : clientId);
-  
-                  return (
-                    <div key={item.id}>
-                      {showDateSeparator && (
-                        <div className="w-full h-10 flex flex-col justify-center items-center my-2">
-                          <Separator />
-                          <span className="text-sm text-muted-foreground">
-                            {format(currentDate, "MMMM d, yyyy")}
-                          </span>
-                        </div>
-                      )}
-                      <div
-                        className={`flex ${
-                          isCurrentUser ? "justify-end" : "justify-start"
-                        }`}
-                      >
-                        <div
-                          className={`lg:max-w-[40%] max-w-[80%] px-2 py-1 font-normal rounded-t-md ${
-                            isCurrentUser
-                              ? "rounded-l-md bg-primary text-white"
-                              : "rounded-r-md bg-muted text-foreground"
-                          }`}
-                        >
-                          {item.filePath ? (
-                            renderFilePreview(
-                              item.filePath,
-                              item.fileType || "",
-                              item.fileName || ""
-                            )
-                          ) : (
-                            <p>{item.content}</p>
-                          )}
-                          <div className="w-full flex justify-end">
-                            <p className="text-[10px] opacity-85">
-                              {format(currentDate, "p")}
-                            </p>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })
-              ) : (
-                <div className="p-8 text-center text-muted-foreground">
-                  No messages selected
-                </div>
-              )}
+              {renderMessages()}
             </div>
           </ScrollArea>
   
@@ -461,15 +472,6 @@ export function ChatDisplay({ data, removedata ,socket }: any) {
             </div>
           )}
   
-          {/* Video Call button */}
-          <div className="chat-controls">
-            <button
-              onClick={startVideoCall}
-              style={{ padding: "10px", backgroundColor: "blue", color: "white" }}
-            >
-              Start Video Call
-            </button>
-          </div>
         </>
       )}
     </div>

@@ -26,7 +26,6 @@ model User {
   doctor_licenses             doctor_licenses?
   doctor_profiles             doctor_profiles?
   reviews                     reviews[]
-
   @@map("users")
 }
 
@@ -127,6 +126,51 @@ model BookedAppointment {
   gender     String
 }
 
+model Message {
+  id             Int      @id @default(autoincrement())
+  content        String
+  senderId       String
+  conversationId String
+  createdAt      DateTime @default(now())
+  fileName       String?
+  filePath       String?
+  fileType       String?
+  seenBy         SeenMessage[]
+  conversation   Conversation @relation(fields: [conversationId], references: [id])
+  sender         User         @relation("UserMessages", fields: [senderId], references: [id])
+}
+
+
+model SeenMessage {
+  id        Int      @id @default(autoincrement())
+  messageId Int
+  userId    String
+  seenAt    DateTime @default(now())
+  message   Message  @relation(fields: [messageId], references: [id])
+  @@unique([messageId, userId])
+}
+
+model Conversation {
+  id            String                    @id @default(cuid())
+  createdAt     DateTime                  @default(now())
+  type          ConversationType          @default(PRIVATE)
+  communityName String?
+  participants  ConversationParticipant[]
+  messages      Message[]
+}
+
+model ConversationParticipant {
+  id             Int          @id @default(autoincrement())
+  conversationId String
+  userId         String
+  joinedAt       DateTime     @default(now())
+  unreadCount    Int          @default(0)
+  conversation   Conversation @relation(fields: [conversationId], references: [id])
+  user           User         @relation("UserParticipants", fields: [userId], references: [id])
+
+  @@unique([conversationId, userId])
+}
+
 model doctor_availability_details {
   id                Int      @id @default(autoincrement())
   userId            String   @unique
@@ -166,39 +210,6 @@ model doctor_profiles {
   experienceYears   String
   consultationFees  String
   users             User   @relation(fields: [userId], references: [id], onDelete: Cascade)
-}
-
-model Message {
-  id             Int          @id @default(autoincrement())
-  content        String
-  senderId       String
-  conversationId String
-  createdAt      DateTime     @default(now())
-  fileName       String?
-  filePath       String?
-  fileType       String?
-  conversation   Conversation @relation(fields: [conversationId], references: [id])
-  sender         User         @relation("UserMessages", fields: [senderId], references: [id])
-}
-
-model Conversation {
-  id            String                    @id @default(cuid())
-  createdAt     DateTime                  @default(now())
-  type          ConversationType          @default(PRIVATE)
-  communityName String?
-  participants  ConversationParticipant[]
-  messages      Message[]
-}
-
-model ConversationParticipant {
-  id             Int          @id @default(autoincrement())
-  conversationId String
-  userId         String
-  joinedAt       DateTime     @default(now())
-  conversation   Conversation @relation(fields: [conversationId], references: [id])
-  user           User         @relation("UserParticipants", fields: [userId], references: [id])
-
-  @@unique([conversationId, userId])
 }
 
 model reviews {

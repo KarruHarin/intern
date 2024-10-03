@@ -1,7 +1,7 @@
 import express, { Request, Response } from 'express';
 import http from 'http';
 import { Server } from 'socket.io';
-import { PrismaClient, Conversation, Message, ConversationParticipant } from '@prisma/client';
+import { PrismaClient, Conversation, Message,Prisma, ConversationParticipant } from '@prisma/client';
 import dotenv from 'dotenv';
 import multer from 'multer';
 import path from 'path';
@@ -102,6 +102,9 @@ interface GetSetIdPayload {
     userId: string;
 }
 
+type MessageWithSeenBy = Prisma.MessageGetPayload<{
+    include: { seenBy: true }
+  }>;
 
 // Socket.io connection
 io.on('connection', (socket) => {
@@ -168,15 +171,7 @@ io.on('connection', (socket) => {
 
     
 
-    socket.on('videoRoom',async ({ doctorId, clientId }: { doctorId: string; clientId: string })=>{
-        if (!doctorId || !clientId) {
-            socket.emit('error', { message: 'Invalid room ID format' });
-            return;
-        }
-
-        const videoRoomId = `video_${doctorId}_${clientId}`;
-        socket.join(videoRoomId)
-    })
+   
     
     // Joining a private conversation room
     socket.on('joinRoom', async ({ doctorId, clientId }: { doctorId: string; clientId: string }) => {
@@ -184,11 +179,11 @@ io.on('connection', (socket) => {
             socket.emit('error', { message: 'Invalid room ID format' });
             return;
         }
-
+    
         const roomId = `room_${doctorId}_${clientId}`;
         socket.join(roomId);
         console.log(`User ${socket.id} joined room: ${roomId}`);
-
+    
         try {
             let conversation = await prisma.conversation.findFirst({
                 where: {
@@ -201,14 +196,30 @@ io.on('connection', (socket) => {
                     },
                 },
                 include: {
-                    messages: true,
+                    messages: {
+                        include: {
+                            seenBy: true,
+                        },
+                        orderBy: {
+                            createdAt: 'asc',
+                        },
+                    },
                     participants: true,
                 },
             });
-
+    
             if (conversation) {
-                socket.emit('conversationId',conversation.id)
-                socket.emit('previousMessages', conversation.messages);
+                // Transform messages to include seenBy information
+                const transformedMessages = conversation.messages.map((message: MessageWithSeenBy) => ({
+                    ...message,
+                    seenBy: message.seenBy.map(seen => ({
+                        userId: seen.userId,
+                        seenAt: seen.seenAt.toISOString(),
+                    })),
+                }));
+    
+                socket.emit('conversationId', conversation.id);
+                socket.emit('previousMessages', transformedMessages);
             } else {
                 conversation = await prisma.conversation.create({
                     data: {
@@ -220,13 +231,16 @@ io.on('connection', (socket) => {
                         },
                     },
                     include: {
-                        messages: true,
+                        messages: {
+                            include: {
+                                seenBy: true,
+                            },
+                        },
                         participants: true,
-                    },
-
-    })
-    socket.emit('conversationId', conversation.id);
-    socket.emit('previousMessages', []);
+                    },
+                });
+                socket.emit('conversationId', conversation.id);
+                socket.emit('previousMessages', []);
             }
         } catch (error) {
             console.error('Error fetching previous messages:', error);
@@ -235,16 +249,16 @@ io.on('connection', (socket) => {
     });
 
     // Sending a message
-   socket.on('sendMessage', async (data) => {
-      console.log("data = ",data)
+    socket.on('sendMessage', async (data) => {
+        console.log("data = ", data)
         try {
             let conversation = await prisma.conversation.findUnique({
                 where: { id: data.conversationId },
                 include: { participants: true },
             });
             console.log("here", data.roomId)
-            let [doctorId,clientId] = data.roomId.split('_')
-
+            let [doctorId, clientId] = data.roomId.split('_')
+    
             if (!conversation) {
                 conversation = await prisma.conversation.create({
                     data: {
@@ -254,13 +268,12 @@ io.on('connection', (socket) => {
                                 { userId: clientId },
                             ],
                         },
-                        
                     },
                     include: {
-                        participants: true, 
+                        participants: true,
                     },
                 });
-            }
+            }
             // Check if it's a community conversation and if the sender is a doctor
             if (conversation?.type === ConversationType.COMMUNITY) {
                 const isDoctor = conversation.participants.some((p: ConversationParticipant) => p.userId === data.senderId);
@@ -269,7 +282,7 @@ io.on('connection', (socket) => {
                     return;
                 }
             }
-
+    
             const newMessage = await prisma.message.create({
                 data: {
                     content: data.message,
@@ -279,8 +292,11 @@ io.on('connection', (socket) => {
                     fileName: data.fileName,
                     fileType: data.fileType,
                 },
+                include: {
+                    seenBy: true
+                }
             });
-            console.log("room id",data.roomId);
+            console.log("room id", data.roomId);
             io.to(data.roomId).emit('receivedMessage', newMessage);
             console.log('Message sent:', newMessage);
         } catch (error) {
@@ -375,6 +391,48 @@ io.on('connection', (socket) => {
             socket.emit('error', { message: 'Error creating community, please try again later.' });
         }
     });
+
+
+    socket.on('markAsSeen', async ({ userId, conversationId, lastSeenMessageId }) => {
+        try {
+            const unseenMessages = await prisma.message.findMany({
+                where: {
+                    conversationId: conversationId,
+                    id: { lte: lastSeenMessageId },
+                    NOT: {
+                        seenBy: {
+                            some: { userId: userId }
+                        }
+                    }
+                },
+            });
+    
+            for (const message of unseenMessages) {
+                await prisma.seenMessage.create({
+                    data: {
+                        messageId: message.id,
+                        userId: userId,
+                    }
+                });
+            }
+    
+            const updatedMessages = await prisma.message.findMany({
+                where: {
+                    conversationId: conversationId,
+                    id: { lte: lastSeenMessageId }
+                },
+                include: {
+                    seenBy: true
+                }
+            });
+    
+            io.to(`room_${conversationId}`).emit('messagesSeen', { userId, lastSeenMessageId, updatedMessages });
+        } catch (error) {
+            console.error('Error marking messages as seen:', error);
+            socket.emit('error', { message: 'Error updating seen status, please try again later.' });
+        }
+    });
+    
 
 
     //connecting to call
